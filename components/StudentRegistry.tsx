@@ -68,7 +68,8 @@ const StudentRegistry: React.FC = () => {
       studentId: newStudent.studentId!,
       department: newStudent.department || 'General',
       email: `${newStudent.name?.split(' ')[0].toLowerCase()}@uni.edu`,
-      photoUrl: capturedImage || `https://picsum.photos/200/200?random=${Date.now()}`,
+      photoUrl: capturedImage || '',
+      photoBase64: capturedImage || undefined,
       status: 'Active'
     };
 
@@ -108,42 +109,48 @@ const StudentRegistry: React.FC = () => {
       </div>
 
       {/* Student List Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredStudents.map((student) => (
-          <div key={student.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition">
-            <div className="p-6 flex items-start gap-4">
-              <div className="w-16 h-16 rounded-full bg-gray-100 overflow-hidden flex-shrink-0 border-2 border-white shadow-sm">
-                <img src={student.photoUrl} alt={student.name} className="w-full h-full object-cover" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-gray-900 truncate">{student.name}</h3>
-                <p className="text-sm text-gray-500 mb-1">{student.studentId}</p>
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                    {student.department}
-                  </span>
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                    student.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                  }`}>
-                    {student.status}
-                  </span>
+      {filteredStudents.length === 0 ? (
+        <div className="text-center text-gray-500 bg-white border border-dashed border-gray-200 rounded-xl py-12">
+          No students found. Add one to get started.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+          {filteredStudents.map((student) => (
+            <div key={student.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition">
+              <div className="p-6 flex items-start gap-4">
+                <div className="w-16 h-16 rounded-full bg-gray-100 overflow-hidden flex-shrink-0 border-2 border-white shadow-sm">
+                  <img src={student.photoUrl || 'https://placehold.co/100x100?text=Face'} alt={student.name} className="w-full h-full object-cover" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-gray-900 truncate">{student.name}</h3>
+                  <p className="text-sm text-gray-500 mb-1">{student.studentId}</p>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                      {student.department}
+                    </span>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                      student.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                    }`}>
+                      {student.status}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <button className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition">
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={() => handleDelete(student.id)}
+                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
-              <div className="flex flex-col gap-2">
-                <button className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition">
-                  <Edit2 className="w-4 h-4" />
-                </button>
-                <button 
-                  onClick={() => handleDelete(student.id)}
-                  className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Add Student Modal */}
       {isModalOpen && (

@@ -8,6 +8,7 @@ export interface Student {
   email: string;
   photoUrl: string;
   status: 'Active' | 'Inactive';
+  photoBase64?: string;
 }
 
 export interface AttendanceRecord {

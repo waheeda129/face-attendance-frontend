@@ -1,17 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, CheckCircle, AlertTriangle, User, Activity } from 'lucide-react';
+import { Camera, AlertTriangle, User, Activity, Scan, CheckCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { AttendanceRecord } from '../types';
+import { AttendanceRecord, Student } from '../types';
+import { getDefaultBaseUrl } from '../api';
 
 const LiveAttendance: React.FC = () => {
   const { students, addAttendance, settings } = useApp();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [recentLogs, setRecentLogs] = useState<AttendanceRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
+  const [faceCount, setFaceCount] = useState(0);
+  const [detectMessage, setDetectMessage] = useState<string>('Waiting for frames...');
+  const [manualStudent, setManualStudent] = useState<string>('');
+  const [recentlyLogged, setRecentlyLogged] = useState<Record<string, number>>({});
 
-  // Start Webcam
+  const apiBase = settings.apiUrl || getDefaultBaseUrl();
+
   const startCamera = async () => {
     try {
       const constraints: MediaStreamConstraints = { 
@@ -26,7 +33,6 @@ const LiveAttendance: React.FC = () => {
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        // Wait for metadata to load
         videoRef.current.onloadedmetadata = () => {
            setIsStreaming(true);
            setError(null);
@@ -48,61 +54,113 @@ const LiveAttendance: React.FC = () => {
     };
   }, [settings.cameraDeviceId]);
 
-  // Simulation Logic
+  // Poll FPS and detection
   useEffect(() => {
     if (!isStreaming) return;
-
-    // Simulate FPS updates
     const fpsInterval = setInterval(() => {
-      setFps(Math.floor(Math.random() * (30 - 24 + 1) + 24)); // Random between 24-30
+      if (videoRef.current) {
+        const track = (videoRef.current.srcObject as MediaStream)?.getVideoTracks()[0];
+        const settings = track?.getSettings();
+        setFps(settings?.frameRate ? Math.round(settings.frameRate) : 24);
+      }
     }, 1000);
 
-    // Simulate Face Detection Events
     const detectionInterval = setInterval(() => {
-      // 40% chance to detect a student every 2.5 seconds
-      if (Math.random() > 0.6 && students.length > 0) {
-        handleMockDetection();
-      }
+      detectFrame();
     }, 2500);
 
     return () => {
       clearInterval(fpsInterval);
       clearInterval(detectionInterval);
     };
-  }, [isStreaming, students]);
+  }, [isStreaming, apiBase]);
 
-  const handleMockDetection = () => {
-    const randomStudent = students[Math.floor(Math.random() * students.length)];
-    const isLate = Math.random() > 0.8;
-    const confidence = 85 + Math.random() * 14;
-    
-    // Create new record
+  const detectFrame = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg');
+
+    try {
+      const res = await fetch(`${apiBase.replace(/\/$/, '')}/recognize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ frame: dataUrl, threshold: settings.minConfidenceThreshold / 100 }),
+      });
+      if (res.status === 501) {
+        setDetectMessage('Recognition unavailable (backend missing CV/runtime).');
+        setFaceCount(0);
+        return;
+      }
+      if (!res.ok) {
+        setDetectMessage('Recognition call failed.');
+        setFaceCount(0);
+        return;
+      }
+      const payload = await res.json();
+      setFaceCount(payload.faces?.length || 0);
+      // Auto-log recognized faces respecting threshold and cooldown.
+      if (payload.faces?.length) {
+        const now = Date.now();
+        payload.faces.forEach((f: any) => {
+          if (f.studentId && f.confidence && f.confidence >= settings.minConfidenceThreshold / 100) {
+            const last = recentlyLogged[f.studentId] || 0;
+            if (now - last > 60_000) { // 60s cooldown
+              const student = students.find((s) => s.id === f.studentId);
+              if (student) {
+                const newRecord: AttendanceRecord = {
+                  id: `${f.studentId}-${now}`,
+                  studentId: student.id,
+                  studentName: student.name,
+                  timestamp: new Date().toISOString(),
+                  status: 'Present',
+                  confidence: f.confidence * 100,
+                };
+                addAttendance(newRecord);
+                setRecentLogs((prev) => [newRecord, ...prev].slice(0, 15));
+                setRecentlyLogged((prev) => ({ ...prev, [student.id]: now }));
+              }
+            }
+          }
+        });
+      }
+      if (payload.faces?.length) {
+        const recognized = payload.faces.find((f: any) => f.studentId);
+        setDetectMessage(recognized ? `Recognized ${recognized.studentName}` : 'Faces detected (unrecognized)');
+      } else {
+        setDetectMessage(payload.message || 'No faces detected');
+      }
+    } catch (err) {
+      console.error('Recognition error', err);
+      setDetectMessage('Recognition unavailable.');
+      setFaceCount(0);
+    }
+  };
+
+  const handleManualLog = () => {
+    const student = students.find((s) => s.id === manualStudent);
+    if (!student) return;
     const newRecord: AttendanceRecord = {
       id: Date.now().toString(),
-      studentId: randomStudent.id,
-      studentName: randomStudent.name,
+      studentId: student.id,
+      studentName: student.name,
       timestamp: new Date().toISOString(),
-      status: isLate ? 'Late' : 'Present',
-      confidence: confidence,
+      status: 'Present',
+      confidence: 0,
     };
-
-    // Update state
-    setRecentLogs(prev => {
-      // Dedupe: Don't add if same student detected in last 5 seconds
-      if (prev.length > 0 && prev[0].studentId === randomStudent.id) {
-          const timeDiff = new Date().getTime() - new Date(prev[0].timestamp).getTime();
-          if (timeDiff < 5000) return prev; 
-      }
-      
-      // Add to global context
-      addAttendance(newRecord);
-
-      return [newRecord, ...prev].slice(0, 15);
-    });
+    addAttendance(newRecord);
+    setRecentLogs((prev) => [newRecord, ...prev].slice(0, 15));
+    setDetectMessage('Logged manually');
   };
 
   return (
     <div className="h-[calc(100vh-10rem)] flex flex-col xl:flex-row gap-6 animate-in fade-in duration-500">
+      <canvas ref={canvasRef} className="hidden" />
       {/* Camera Feed Section */}
       <div className="flex-1 bg-black rounded-2xl overflow-hidden relative shadow-lg flex flex-col justify-center items-center group">
         
@@ -139,24 +197,10 @@ const LiveAttendance: React.FC = () => {
                  <Activity className="w-3 h-3" />
                  {fps} FPS
               </div>
-            </div>
-
-            {/* Simulated Bounding Box (Visual Only) */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-               <div className="w-64 h-64 border-2 border-green-400/50 rounded-lg relative animate-pulse opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                  <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-green-500 -mt-1 -ml-1"></div>
-                  <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-green-500 -mt-1 -mr-1"></div>
-                  <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-green-500 -mb-1 -ml-1"></div>
-                  <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-green-500 -mb-1 -mr-1"></div>
-                  <div className="absolute -top-6 left-0 bg-green-500 text-black text-[10px] font-bold px-2 py-0.5 rounded">
-                    DETECTING...
-                  </div>
-               </div>
-            </div>
-            
-            {/* Scanning Line Animation */}
-            <div className="absolute inset-0 pointer-events-none opacity-20 z-10">
-               <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-green-400 to-transparent absolute top-0 animate-[scan_3s_linear_infinite]"></div>
+              <div className="bg-black/60 backdrop-blur-md text-white px-4 py-1.5 rounded-full text-xs font-bold font-mono border border-white/10 flex items-center gap-2">
+                 <Scan className="w-3 h-3" />
+                 {detectMessage}
+              </div>
             </div>
           </div>
         )}
@@ -170,8 +214,35 @@ const LiveAttendance: React.FC = () => {
             Detection Log
           </h2>
           <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-700 px-2 py-1 rounded-md">
-            Simulation
+            Backend
           </span>
+        </div>
+
+        <div className="p-4 border-b border-gray-100 flex flex-col gap-3">
+          <div className="text-sm text-gray-700 flex items-center justify-between">
+            <span>Faces in frame: <strong>{faceCount}</strong></span>
+            <span className="text-xs text-gray-500">{detectMessage}</span>
+          </div>
+          <div className="flex gap-2">
+            <select 
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+              value={manualStudent}
+              onChange={(e) => setManualStudent(e.target.value)}
+            >
+              <option value="">Select student to log</option>
+              {students.map((s) => (
+                <option key={s.id} value={s.id}>{s.name} ({s.studentId})</option>
+              ))}
+            </select>
+            <button
+              onClick={handleManualLog}
+              disabled={!manualStudent}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50"
+            >
+              Mark
+            </button>
+          </div>
+          <p className="text-xs text-gray-500">Automatic face recognition is pending model integration. Manual logging keeps records consistent meanwhile.</p>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-hide">
@@ -180,9 +251,9 @@ const LiveAttendance: React.FC = () => {
               <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-3">
                 <User className="w-8 h-8 opacity-20" />
               </div>
-              <p className="text-sm font-medium">Waiting for detections...</p>
+              <p className="text-sm font-medium">No attendance logs yet.</p>
               <p className="text-xs text-gray-300 text-center px-4 mt-2">
-                Simulating face recognition events...
+                Detect faces then mark attendance to populate this list.
               </p>
             </div>
           ) : (
@@ -199,14 +270,10 @@ const LiveAttendance: React.FC = () => {
                   <p className="font-bold text-gray-900 truncate text-sm">{log.studentName}</p>
                   <p className="text-xs text-gray-500 flex items-center gap-1">
                     {new Date(log.timestamp).toLocaleTimeString()}
-                    <span className="text-gray-300">|</span>
-                    <span className="text-green-600 font-medium">{log.confidence.toFixed(1)}% Match</span>
                   </p>
                 </div>
-                <div className={`p-2 rounded-lg ${
-                  log.status === 'Present' ? 'bg-green-50 text-green-600' : 'bg-yellow-50 text-yellow-600'
-                }`}>
-                  {log.status === 'Present' ? <CheckCircle className="w-5 h-5" /> : <ClockIcon className="w-5 h-5" />}
+                <div className="p-2 rounded-lg bg-green-50 text-green-600">
+                  <CheckCircle className="w-5 h-5" />
                 </div>
               </div>
             ))
@@ -216,13 +283,5 @@ const LiveAttendance: React.FC = () => {
     </div>
   );
 };
-
-// Helper component for icon
-const ClockIcon = ({ className }: { className?: string }) => (
-  <svg className={className} width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10" />
-    <polyline points="12 6 12 12 16 14" />
-  </svg>
-);
 
 export default LiveAttendance;

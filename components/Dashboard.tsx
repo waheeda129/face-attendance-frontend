@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Users, UserCheck, Clock, Activity } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { CHART_DATA } from '../constants';
+import { useApp } from '../context/AppContext';
 
 const StatCard = ({ title, value, icon: Icon, color, trend }: any) => (
   <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-start justify-between">
@@ -19,41 +19,112 @@ const StatCard = ({ title, value, icon: Icon, color, trend }: any) => (
 );
 
 const Dashboard: React.FC = () => {
+  const { students, attendance } = useApp();
+
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+
+  const { presentToday, lateToday, chartData, avgRate, deptPerformance } = useMemo(() => {
+    const byDate: Record<string, { present: number; late: number }> = {};
+    const deptCounts: Record<string, { present: number; total: number }> = {};
+    let presentTodayCount = 0;
+    let lateTodayCount = 0;
+
+    attendance.forEach((record) => {
+      const dateKey = record.timestamp.split('T')[0];
+      if (!byDate[dateKey]) byDate[dateKey] = { present: 0, late: 0 };
+      if (record.status === 'Present') {
+        byDate[dateKey].present += 1;
+      } else if (record.status === 'Late') {
+        byDate[dateKey].late += 1;
+      }
+
+      if (dateKey === todayStr) {
+        if (record.status === 'Present') presentTodayCount += 1;
+        if (record.status === 'Late') lateTodayCount += 1;
+      }
+
+      const student = students.find((s) => s.id === record.studentId);
+      if (student) {
+        const key = student.department || 'General';
+        if (!deptCounts[key]) deptCounts[key] = { present: 0, total: 0 };
+        deptCounts[key].present += record.status === 'Present' ? 1 : 0;
+      }
+    });
+
+    students.forEach((s) => {
+      const key = s.department || 'General';
+      if (!deptCounts[key]) deptCounts[key] = { present: 0, total: 0 };
+      deptCounts[key].total += 1;
+    });
+
+    // Last 7 days chart
+    const days = Array.from({ length: 7 })
+      .map((_, idx) => {
+        const d = new Date();
+        d.setDate(d.getDate() - (6 - idx));
+        return d;
+      })
+      .map((d) => {
+        const key = d.toISOString().split('T')[0];
+        const day = d.toLocaleDateString(undefined, { weekday: 'short' });
+        const entry = byDate[key] || { present: 0, late: 0 };
+        const totalDay = entry.present + entry.late;
+        const absent = Math.max(students.length - totalDay, 0);
+        return { name: day, present: entry.present, absent };
+      });
+
+    const attendanceRate =
+      students.length > 0 ? Math.round((presentTodayCount / students.length) * 100) : 0;
+
+    const deptPerf = Object.entries(deptCounts).map(([label, data]) => ({
+      label,
+      value: data.total ? Math.round((data.present / data.total) * 100) : 0,
+    }));
+
+    return {
+      presentToday: presentTodayCount,
+      lateToday: lateTodayCount,
+      chartData: days,
+      avgRate: attendanceRate,
+      deptPerformance: deptPerf,
+    };
+  }, [attendance, students, todayStr]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard Overview</h1>
-        <div className="text-sm text-gray-500">Last updated: Just now</div>
+        <div className="text-sm text-gray-500">Live data from backend</div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard 
           title="Total Students" 
-          value="1,248" 
+          value={students.length} 
           icon={Users} 
           color="bg-blue-500"
-          trend={2.5}
+          trend={students.length > 0 ? 2.5 : 0}
         />
         <StatCard 
           title="Present Today" 
-          value="1,102" 
+          value={presentToday} 
           icon={UserCheck} 
           color="bg-green-500"
-          trend={4.2}
+          trend={presentToday >= 0 ? 0 : 0}
         />
         <StatCard 
           title="Late Arrivals" 
-          value="45" 
+          value={lateToday} 
           icon={Clock} 
           color="bg-yellow-500"
-          trend={-1.5}
+          trend={lateToday}
         />
         <StatCard 
           title="Avg Attendance" 
-          value="92%" 
+          value={`${avgRate}%`} 
           icon={Activity} 
           color="bg-indigo-500"
-          trend={0.8}
+          trend={avgRate}
         />
       </div>
 
@@ -62,7 +133,7 @@ const Dashboard: React.FC = () => {
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Weekly Attendance Overview</h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={CHART_DATA} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#6B7280' }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#6B7280' }} />
@@ -81,13 +152,7 @@ const Dashboard: React.FC = () => {
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Department Performance</h3>
           <div className="space-y-4">
-            {[
-              { label: 'Computer Science', value: 96, color: 'bg-green-500' },
-              { label: 'Engineering', value: 88, color: 'bg-blue-500' },
-              { label: 'Physics', value: 92, color: 'bg-indigo-500' },
-              { label: 'Arts', value: 85, color: 'bg-yellow-500' },
-              { label: 'Business', value: 90, color: 'bg-purple-500' },
-            ].map((dept) => (
+            {deptPerformance.map((dept) => (
               <div key={dept.label}>
                 <div className="flex justify-between text-sm mb-1">
                   <span className="font-medium text-gray-700">{dept.label}</span>
@@ -101,6 +166,9 @@ const Dashboard: React.FC = () => {
                 </div>
               </div>
             ))}
+            {deptPerformance.length === 0 && (
+              <p className="text-sm text-gray-500">No data yet. Add students and attendance to see performance.</p>
+            )}
           </div>
         </div>
       </div>
